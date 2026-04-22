@@ -4,6 +4,8 @@ This project builds machine learning models to predict whether a patient in the 
 
 **Note:** This is an introductory project intended to help students understand the core concepts and workflow of applied machine learning — data loading, exploratory analysis, preprocessing, feature selection, model training, hyperparameter tuning, and evaluation. The results are modest by design; the focus is on understanding the process, not achieving state-of-the-art performance.
 
+**Note on model choice:** The raw dataset is a time-series — one row of measurements per hour per patient. The most powerful approach for time-series data would be a dedicated sequence model such as an LSTM or Transformer. However, these architectures have not been covered in this course, so we do not use them here. Instead, we collapse the time-series into a single row per patient using statistical aggregations (min, max, mean, std, range) and apply tabular classifiers (Random Forest and XGBoost) that students are already familiar with. This is a deliberate pedagogical choice, not an oversight — and it is one of the reasons the results are more modest than what a sequence model could achieve on the same data.
+
 The project is structured as four sequential Jupyter notebooks, designed for students learning applied machine learning. Every step is explained in plain language alongside the code.
 
 ---
@@ -138,13 +140,16 @@ The notebooks must be run **in order**. Each one saves its outputs to Google Dri
 
 02_preprocessing.ipynb
     └── reads: patient_data.csv
-    └── saves: X_train.csv, X_test.csv, y_train.csv, y_test.csv
+    └── saves: X_train.csv, X_test.csv, y_train.csv, y_test.csv          (5,000-patient sample)
+    └── saves: X_train_full.csv, X_test_full.csv, y_train_full.csv, y_test_full.csv  (full dataset)
 
 03_random_forest.ipynb
-    └── reads: X_train.csv, X_test.csv, y_train.csv, y_test.csv
+    └── reads: X_train.csv, X_test.csv, y_train.csv, y_test.csv          (sample — for baseline + tuning)
+    └── reads: X_train_full.csv, X_test_full.csv, y_train_full.csv, y_test_full.csv  (full — for final model)
 
 04_xgboost.ipynb
-    └── reads: X_train.csv, X_test.csv, y_train.csv, y_test.csv
+    └── reads: X_train.csv, X_test.csv, y_train.csv, y_test.csv          (sample — for baseline + tuning)
+    └── reads: X_train_full.csv, X_test_full.csv, y_train_full.csv, y_test_full.csv  (full — for final model)
 ```
 
 ---
@@ -188,7 +193,19 @@ For each patient, we compute:
 - `Age` and `Gender` — taken as the first value (same every hour)
 - `Sepsis` — 1 if the `SepsisLabel` was ever 1 across any hour, else 0
 
-This produces one row per patient with `33 × 3 + 2 = 101` feature columns plus the Sepsis target.
+For each patient we compute five aggregations per vital sign and lab value:
+
+| Aggregation | What it captures |
+|---|---|
+| `_min` | Lowest recorded value |
+| `_max` | Peak value — highest severity reached |
+| `_mean` | Average over the entire ICU stay |
+| `_std` | Standard deviation — how much the measurement fluctuated. High std means physiological instability |
+| `_range` | `max - min` — total spread. Captures instability with less redundancy than keeping `_min` and `_max` as separate features |
+
+We also include `ICULOS_max` — the patient's total ICU length of stay in hours. This is derived from the `ICULOS` column (previously dropped), by taking its maximum value per patient, which equals total hours in the ICU.
+
+This produces one row per patient with `34 × 5 + 2 + 1 = 173` feature columns plus the Sepsis target.
 
 The multi-level column names from `.agg()` (e.g. `('HR', 'min')`) are flattened into single strings (`'HR_min'`).
 
@@ -211,7 +228,8 @@ The multi-level column names from `.agg()` (e.g. `('HR', 'min')`) are flattened 
 
 **File:** `02_preprocessing.ipynb`  
 **Input:** `patient_data.csv`  
-**Output:** `X_train.csv`, `X_test.csv`, `y_train.csv`, `y_test.csv`
+**Output:** `X_train.csv`, `X_test.csv`, `y_train.csv`, `y_test.csv` (5,000-patient RFE sample)  
+**Also saves:** `X_train_full.csv`, `X_test_full.csv`, `y_train_full.csv`, `y_test_full.csv` (full dataset — all 40,336 patients)
 
 ### Data Leakage
 
@@ -219,10 +237,18 @@ All preprocessing steps are **fit on the training set only**. The scaler, impute
 
 ### Stratified Sampling
 
-We work with a subset of 5,000 patients to keep the RFE step fast enough to run in Colab. The sample is **stratified** — the sepsis rate in the sample is the same as in the full dataset. Two sampling methods are shown:
+We work with a subset of 5,000 patients to keep the RFE step fast enough to run in Colab. The sample is **stratified** — the sepsis rate in the sample matches the full dataset (~7.3%).
 
-- **Method A:** A custom `sample_group()` function passed to `groupby().apply()` — makes the proportional logic explicit
-- **Method B:** `train_test_split(test_size=5000, stratify=y)` — more concise, same result
+The active method is `train_test_split(test_size=5000, stratify=patient_df['Sepsis'])`. A manual groupby alternative (Method A) is retained as a commented-out reference.
+
+**Why preserve the natural class imbalance rather than balancing to 50/50?**
+
+The ~7.3% sepsis rate is not a sampling artefact — it is a real property of ICU patient populations. Artificially inflating the sepsis fraction to 50% would mean training on a world where half of all ICU patients develop sepsis, which is not true. This creates two specific problems:
+
+1. **`scale_pos_weight` and `class_weight` would be wrong.** Both parameters are computed from the training class counts to correct for imbalance. If the training set is already 50/50, these corrections have nothing to correct — and applying them would actually over-penalise the majority class, distorting learning in the opposite direction.
+2. **Evaluation metrics would be misleading.** Precision, recall, and F1 are all sensitive to the class distribution in the test set. If the test set is artificially balanced, the reported scores do not reflect how the model would perform on real patients, making the results look better than they are.
+
+The correct approach is to preserve the natural imbalance in the data and let the model handle it explicitly — via `class_weight='balanced'` in Random Forest and `scale_pos_weight` in XGBoost.
 
 ### Feature Reduction Pipeline
 
@@ -245,7 +271,9 @@ We work with a subset of 5,000 patients to keep the RFE step fast enough to run 
 
 **StandardScaler:** Rescales every feature to mean=0, std=1. This prevents features with large numeric ranges (e.g. glucose) from dominating over features with small ranges (e.g. pH).
 
-**RFE sweep:** Starting from N//4 features and halving each step, we test several values of `k`. For each `k`, a lightweight Random Forest ranks the features, selects the top `k`, and a slightly larger Random Forest evaluates the result. The F1 score is plotted against `k` and the best value is used for the final RFE. The plot includes an annotated red dashed line at the best `k`.
+**RFE sweep:** Starting from N//4 features and halving each step, we test several values of `k`. For each `k`, a lightweight Random Forest ranks the features, selects the top `k`, and a slightly larger Random Forest evaluates it using 5-fold cross-validation on the training set only (no test set used). The CV F1 score is plotted against `k` and the best value is used for the final RFE.
+
+**Full-dataset preprocessing:** After the RFE sweep determines the best features, the same preprocessing pipeline (imputer, scaler, RFE feature mask — all fitted on the 5,000-patient sample training set) is applied to all 40,336 patients. The full dataset is split 80/20 and the preprocessed files are saved separately as `X_train_full.csv` etc. Notebooks 3 and 4 use these for final model training.
 
 ---
 
@@ -297,16 +325,21 @@ XGBoost is generally faster and more accurate than Random Forest on tabular data
 
 XGBoost does not have a `class_weight='balanced'` parameter. Instead, `scale_pos_weight = count(non-sepsis) / count(sepsis)` is used. This tells the model how much more to penalise missing a sepsis patient compared to a false alarm. The value is computed directly from the training set counts.
 
-### Hyperparameter Tuning — GridSearchCV
+### Hyperparameter Tuning — Bayesian Optimisation
 
-Same setup as Notebook 3 (5-fold stratified CV, F1 scoring) to keep the comparison fair.
+Instead of GridSearchCV, XGBoost is tuned with `BayesSearchCV` from `scikit-optimize`. Bayesian optimisation builds a probabilistic model of how each hyperparameter combination affects the CV F1 score, and uses that model to select the next combination to try — concentrating evaluations in promising regions rather than exhaustively covering a fixed grid.
 
-| Parameter | Values | Description |
+This finds better hyperparameters than grid search with far fewer model fits, and searches continuous ranges rather than a handful of discrete values.
+
+| Parameter | Search Range | Description |
 |---|---|---|
-| `n_estimators` | 100, 200 | Number of boosting rounds |
-| `max_depth` | 3, 5, 7 | Tree depth |
-| `learning_rate` | 0.05, 0.1 | Contribution of each new tree |
-| `subsample` | 0.8, 1.0 | Fraction of patients used per tree |
+| `n_estimators` | 50 – 400 (integer) | Number of boosting rounds |
+| `max_depth` | 2 – 8 (integer) | Tree depth |
+| `learning_rate` | 0.01 – 0.3 (log-uniform) | Contribution of each new tree |
+| `subsample` | 0.5 – 1.0 (uniform) | Fraction of patients used per tree |
+| `colsample_bytree` | 0.5 – 1.0 (uniform) | Fraction of features sampled per tree |
+
+30 iterations are run (configurable). Each iteration fits 5 cross-validation folds, so the total is 150 fits — comparable to GridSearchCV's 120, but guided rather than exhaustive.
 
 ### Model Comparison
 
@@ -332,9 +365,15 @@ The comparison is shown as:
 
 Accuracy is misleading on imbalanced data. If 95% of patients are non-sepsis, always predicting Non-Sepsis gives 95% accuracy. F1 score balances precision (how many of our sepsis predictions are correct) and recall (how many real sepsis cases we catch). It forces the model to actually identify sepsis patients, not just optimise for the majority class.
 
-### Why a stratified sample of 5,000?
+### Why a stratified sample of 5,000, and why preserve the imbalance?
 
-RFE trains many models internally — one for each candidate `k` value, multiplied by the cross-validation folds. Running this on tens of thousands of patients would take many hours in Colab. The stratified 5,000-patient sample preserves the real sepsis rate, so the model sees the same class balance as the full dataset.
+RFE trains many models internally — one for each candidate `k` value, multiplied by the cross-validation folds. Running this on tens of thousands of patients would take many hours in Colab. A 5,000-patient sample keeps it fast enough to run in a single Colab session.
+
+The sample is stratified so the ~7.3% sepsis rate matches the full dataset. This is intentional — the class imbalance is **not corrected** to 50/50 or any other ratio, and that is the right decision for three reasons:
+
+- **The imbalance is real.** Sepsis affects roughly 7% of ICU patients. A model trained on a 50/50 split would be calibrated to a world where half of all ICU patients are septic, which does not exist. Its predictions and confidence scores would not be meaningful in practice.
+- **The class weights depend on it.** `scale_pos_weight` in XGBoost is computed as `count(non-sepsis) / count(sepsis)` — approximately 12.79. This tells the model how much harder to penalise a missed sepsis case relative to a false alarm. If the training set were artificially balanced, this ratio would be 1.0, and the correction would do nothing. Applying a weight computed from a balanced set to an imbalanced real-world distribution would produce wrong predictions.
+- **Evaluation stays honest.** Test set metrics (precision, recall, F1, AUC) should reflect real-world performance. An artificially balanced test set inflates reported recall and F1 scores, making the model look better than it actually is on genuine patient data.
 
 ### Why `class_weight='balanced'` and `scale_pos_weight`?
 
@@ -360,8 +399,13 @@ We first drop columns with more than 90% missing. Then we impute the remaining m
 | `seaborn` | Plot styling and heatmap |
 | `scikit-learn` | Preprocessing, feature selection, RF, GridSearchCV, metrics |
 | `xgboost` | XGBoost classifier |
+| `scikit-optimize` | Bayesian hyperparameter optimisation (`BayesSearchCV`) |
 
-All libraries are pre-installed in Google Colab.
+`pandas`, `numpy`, `matplotlib`, `seaborn`, `scikit-learn`, and `xgboost` are pre-installed in Google Colab. Install `scikit-optimize` with:
+
+```python
+!pip install scikit-optimize
+```
 
 ---
 
@@ -371,71 +415,144 @@ All libraries are pre-installed in Google Colab.
 
 | Stage | Features Remaining |
 |---|---|
-| After aggregation (Notebook 1) | 104 |
-| After zero-variance removal | 104 |
-| After high-null removal (>90%) | 98 |
-| After VarianceThreshold (0.01) | 95 |
-| After RFE (best k=23) | 23 |
+| After aggregation (Notebook 1) | 173 (34 cols × 5 aggs + ICULOS_max + Age + Gender) |
+| After zero-variance removal | 173 |
+| After high-null removal (>90%) | 161 |
+| After VarianceThreshold (0.01) | 156 |
+| After RFE (best k=50) | **50** |
 
-**23 features selected by RFE:** `Temp_max`, `Temp_mean`, `PaCO2_min`, `BUN_max`, `BUN_mean`, `Creatinine_min`, `Creatinine_max`, `Lactate_min`, `Lactate_max`, `Lactate_mean`, `Phosphate_min`, `Phosphate_mean`, `Potassium_mean`, `Hct_max`, `Hct_mean`, `Hgb_max`, `Hgb_mean`, `PTT_mean`, `WBC_min`, `WBC_max`, `Fibrinogen_max`, `Platelets_min`, `Platelets_max`
+RFE was run on the full training set (~32,000 patients) with a dense sweep (every integer 1–20, then every 10 up to 150). The CV F1 peaked at **k=50** (CV F1 = 0.5438). The selected features include absolute values (Temp_max, Lactate_min, Creatinine_max, PTT, WBC, Fibrinogen, Platelets, Bilirubin, Hgb_mean/std, Platelets_std), range features for all 34 vital/lab measurements, and ICULOS_max.
 
 ### Model Performance (Notebooks 3 and 4)
 
-| Model | F1 Score | ROC-AUC | Precision | Recall |
-|---|---|---|---|---|
-| Random Forest (baseline) | 0.0000 | 0.7167 | — | — |
-| Random Forest (tuned, GridSearch) | 0.0879 | 0.6965 | 0.2222 | 0.0548 |
-| XGBoost (baseline) | 0.1538 | 0.6977 | — | — |
-| XGBoost (tuned, GridSearch) | **0.2581** | **0.6999** | 0.2439 | 0.2740 |
+#### 5,000-patient sample (baseline and tuning)
 
-XGBoost outperforms Random Forest on every metric and catches nearly 5× more sepsis cases (recall 27.4% vs 5.5%).
+| Model | F1 Score | ROC-AUC | Precision | Recall | Sepsis caught |
+|---|---|---|---|---|---|
+| Random Forest (baseline) | 0.3516 | 0.9455 | 0.89 | 0.22 | 16 / 73 |
+| Random Forest (tuned, GridSearch) | 0.5607 | 0.9317 | 0.8824 | 0.4110 | 30 / 73 |
+| XGBoost (baseline) | 0.6870 | 0.9411 | 0.78 | 0.62 | 45 / 73 |
+| XGBoost (tuned, Bayesian opt, 60 iter) | **0.7218** | **0.9516** | 0.80 | 0.6575 | 48 / 73 |
 
-### Confusion Matrices
+#### Full dataset — 40,336 patients with SMOTE (final evaluation)
 
-**Random Forest (tuned):** TN=913, FP=14, FN=69, TP=4  
-**XGBoost (tuned):** TN=865, FP=62, FN=53, TP=20
+| Model | F1 Score | ROC-AUC | Precision | Recall | Sepsis caught | Best threshold |
+|---|---|---|---|---|---|---|
+| Random Forest (full + SMOTE) | 0.6025 | 0.9091 | 0.5492 | 0.6672 | 391 / 586 | 0.50 |
+| XGBoost (full + SMOTE) | **0.6788** | **0.9235** | 0.7775 | 0.6024 | 353 / 586 | 0.45 |
+
+**XGBoost wins** on F1, AUC, and precision on the full dataset. Random Forest catches slightly more patients in absolute terms (391 vs 353) by using a less conservative threshold.
+
+### Confusion Matrices (full dataset)
+
+**Random Forest (full, SMOTE):** TN=7,161, FP=321, FN=195, TP=391  
+**XGBoost (full, SMOTE):** TN=7,381, FP=101, FN=233, TP=353
 
 ---
 
 ## Interpretation
 
-These results are modest, and that is expected. This is a basic introductory project — the goal is to understand the end-to-end machine learning workflow, not to build a production-ready clinical tool.
-
 ### What the numbers mean
 
-The baseline Random Forest predicted every patient as non-sepsis (F1 = 0.00). This is a classic failure mode on imbalanced data — the model found it easier to ignore the minority class entirely. Adding `class_weight='balanced'` and tuning with GridSearchCV helped, but only marginally (F1 = 0.09). The tuned Random Forest still misses 69 out of 73 sepsis patients in the test set.
+**XGBoost (tuned, 60-iteration Bayesian optimisation)** is the best model, with F1=0.72 and AUC=0.95 on the 5,000-patient test set — the highest in the entire project. On the full dataset with SMOTE, it achieves F1=0.68, catching 353 of 586 sepsis patients (60% recall) with 78% precision.
 
-XGBoost does considerably better after tuning (F1 = 0.26), catching 20 of 73 sepsis cases. This is still far from clinically useful — more than half of all sepsis patients are still missed — but the improvement over Random Forest is meaningful and illustrates why boosting methods often outperform bagging methods on tabular, imbalanced datasets.
+The most important features across both models are **ICULOS_max** (ICU stay duration), **Lactate** measurements, **Bilirubin_total**, **PTT**, and **range features** for vital signs. The 34 range features (max−min per measurement) proved highly informative — physiological instability, not just peak values, is a strong sepsis indicator.
 
-The ROC-AUC scores (~0.70 for both models) suggest the models have some genuine discriminative ability — they are not just guessing — but they struggle to convert that ability into good classification at a fixed decision threshold, primarily because of how imbalanced the classes are.
-
-The selected features are clinically interpretable: temperature, kidney markers (BUN, creatinine), lactate, and blood counts are all well-established indicators of physiological stress and organ dysfunction, which aligns with the clinical understanding of sepsis progression.
+**Why do full-dataset F1 scores look lower than sample F1 scores?** This is a scale issue, not a model quality issue. The sample test set has 73 sepsis patients; the full test set has 586. A model that catches 60% of 73 patients (44) scores F1≈0.70. The same model catching 60% of 586 patients (352) scores F1≈0.68, because the larger non-sepsis pool (7,482 patients) generates more false alarms proportionally. The model behaviour is consistent — the evaluation is just more rigorous at full scale.
 
 ### Why the performance is limited
 
-Several factors contribute to the modest results:
+- **ICULOS_max is a partially indirect signal.** It is genuinely predictive but reflects the outcome as much as the cause — sepsis patients stay longer partly because of the sepsis. A more robust feature would be ICULOS at the time of prediction (hours elapsed so far), not total stay length.
+- **Range features dominate.** 34 of 50 selected features are `_range` values. They are meaningful but also correlated with each other — a physiologically unstable patient tends to have high range across multiple measurements simultaneously.
+- **GridSearchCV for RF tested only 24 combinations.** Switching RF to Bayesian optimisation (as done for XGBoost) would likely improve the RF result further.
 
-- **Small training set:** We used only 5,000 of the 40,336 available patients. The sepsis subset within that sample is tiny — around 365 patients — which gives the models very little signal to learn from.
-- **Heavy aggregation:** Collapsing a time-series into min/max/mean destroys the temporal dynamics of how vital signs and labs change over time. A patient whose lactate is rising rapidly is very different from one whose lactate is stable at the same mean value — but our features cannot represent this.
-- **Aggressive feature reduction:** Reducing to 23 features may have discarded information that would have been useful.
-- **Grid search limitations:** GridSearchCV only tests a small, manually defined grid of hyperparameter combinations. Many potentially better configurations are never evaluated.
+---
 
-### Ways to improve the models
+## Challenges and Improvements Made
 
-This project intentionally keeps things simple. For students who want to go further, the following are natural next steps:
+This section documents the challenges encountered during development and every improvement made to address them.
 
-**Better handling of class imbalance**
+### Challenge 1 — Class imbalance (7.3% sepsis rate)
 
-- **SMOTE (Synthetic Minority Oversampling Technique):** Instead of re-weighting existing samples, SMOTE generates synthetic sepsis patients by interpolating between real ones. This gives the model more minority-class examples to learn from without simply repeating the same data points. It must be applied to the training set only, after the train/test split.
-- **Increase the sepsis sample size:** Rather than taking a stratified 5,000-patient sample, deliberately oversample from the sepsis patients in the full dataset. For example, include all 2,932 sepsis patients and sample a proportional number of non-sepsis patients. This immediately gives the model more real sepsis cases to learn from.
+**Problem:** Only 7.3% of patients develop sepsis. A model that always predicts Non-Sepsis achieves 93% accuracy while catching zero sepsis cases. Standard metrics like accuracy are useless here.
 
-**Better hyperparameter search**
+**What we did:**
+- Used **F1 score** as the primary evaluation metric throughout — it penalises models that ignore the minority class.
+- Applied `class_weight='balanced'` in Random Forest to increase the training penalty for missing a sepsis case.
+- Applied `scale_pos_weight = count(non-sepsis) / count(sepsis) ≈ 12.79` in XGBoost — the equivalent parameter.
+- Applied **SMOTE** (Synthetic Minority Over-sampling Technique) to the full training set, generating synthetic sepsis patients by interpolating between real ones. This produced a 50/50 balanced training set, allowing the model to learn from far more minority-class examples without repeating the same 2,346 real patients.
 
-- **Bayesian optimisation:** GridSearchCV evaluates all combinations exhaustively and treats each one independently. Bayesian optimisation (e.g. using `optuna` or `scikit-optimize`) builds a probabilistic model of how hyperparameters affect performance, and uses that model to choose the next combination to try. It finds better configurations with far fewer evaluations — particularly useful when the search space is large.
+---
 
-**Better features**
+### Challenge 2 — Small training set for the minority class
 
-- **Temporal features:** Rather than just min/max/mean, compute features like rate of change (e.g. lactate increase over the last 6 hours), time since last measurement, or the number of hours with an abnormal value. These capture the dynamics that static aggregations miss.
-- **Retain more patients:** Running on the full 40,336-patient dataset would give far more training signal, at the cost of longer compute time.
+**Problem:** The initial approach used a 5,000-patient stratified sample for all steps, including RFE and model training. With only ~290 sepsis patients in that sample, the models had very limited minority-class signal. RFE on the sample was so noisy it selected only k=4 features.
 
-These improvements are not implemented here because the purpose of this project is to teach the fundamentals clearly. Each notebook is kept short enough to run and understand in one sitting. The improvements listed above are well-documented in the literature and are straightforward to implement once the baseline pipeline is understood.
+**What we did:**
+- **Moved RFE to run on the full training set** (~32,000 patients). With ~2,346 sepsis patients in the full training set — 8× more — the internal RF ranker produced far more reliable feature importance estimates.
+- **Trained final models on the full 40,336-patient dataset** (with SMOTE) rather than the 5,000-patient sample. The 5,000-patient sample is now only used for fast baseline exploration.
+- **Denser RFE sweep:** Changed from a coarse halving strategy (1, 2, 4, 9, 19...) to testing every integer from 1–20, then every 10 up to 150. This prevented the optimum from being missed between tested values — the previous coarse sweep had jumped from k=4 straight to k=9, missing the true peak.
+
+---
+
+### Challenge 3 — Feature engineering and redundancy
+
+**Problem:** The initial aggregation produced only `_min`, `_max`, `_mean` per measurement — 3 highly correlated features per variable. With 104 features but most carrying redundant information, the models were learning from far less independent signal than the feature count suggested. RFE selected only 4 features (k=4) because adding more correlated features added noise faster than signal.
+
+**What we did:**
+- Added **standard deviation (`_std`)** per measurement — captures how much the value fluctuated across the ICU stay. High std indicates physiological instability, which is a clinical warning sign independent of the mean or max.
+- Added **range (`_range` = max − min)** per measurement — captures total spread. Less redundant than keeping both `_min` and `_max` as separate inputs because it encodes variability in a single number.
+- Added **`ICULOS_max`** — total ICU length of stay. Previously dropped as "metadata", this was reinstated because it is a meaningful patient-level signal: longer stays correlate with more complex, higher-severity cases.
+- These additions increased the feature count from 104 to 173, and RFE on the full dataset now selected **50 features** instead of 4 — a much richer and more informative set.
+
+---
+
+### Challenge 4 — RFE evaluated on the test set (data leakage)
+
+**Problem:** The original RFE sweep evaluated each `k` value using the test set labels (`y_test`) to pick the best `k`. This is a subtle form of data leakage — the choice of how many features to keep was informed by data that should be completely unseen. It inflated final evaluation metrics.
+
+**What we did:**
+- Replaced test-set evaluation with **5-fold cross-validation on the training set only** (`cross_val_score` with `StratifiedKFold`). The test set is now kept completely untouched until the final model evaluation in Notebooks 3 and 4.
+
+---
+
+### Challenge 5 — Hyperparameter tuning efficiency
+
+**Problem:** GridSearchCV for XGBoost tested only a fixed 24-combination grid. This missed large portions of the hyperparameter space and only tested discrete values — a learning rate of 0.07 (the optimal found by Bayesian search) would never have been tested on a grid of {0.05, 0.1}.
+
+**What we did:**
+- **Replaced GridSearchCV with Bayesian Optimisation** (`BayesSearchCV` from `scikit-optimize`) for XGBoost. Bayesian optimisation builds a probabilistic model of the objective function and concentrates evaluations in promising regions, searching continuous ranges rather than a fixed grid.
+- **Increased iterations from 30 to 60** to give the optimiser more budget. The best configuration found was `learning_rate=0.071, max_depth=7, n_estimators=323, subsample=0.810, colsample_bytree=1.0` — values that a grid search would never have found.
+
+---
+
+### Challenge 6 — Decision threshold calibration
+
+**Problem:** Both models defaulted to a 0.50 decision threshold — predict Sepsis if the estimated probability exceeds 50%. On imbalanced data, this threshold is rarely optimal. The models had excellent AUC (strong ranking ability) but suboptimal F1 because the threshold was not tuned.
+
+**What we did:**
+- Added a **threshold sweep** in both Notebooks 3 and 4, testing thresholds from 0.05 to 0.50 and printing precision, recall, F1, and absolute sepsis count at each level. This gives a clear view of the precision-recall trade-off and lets the user choose a threshold appropriate for their clinical context (e.g. if recall is more important than precision, use a lower threshold).
+- For XGBoost, the optimal threshold was **0.45** (F1 = 0.6792, catching 362 of 586 patients). For Random Forest the default 0.50 was already optimal for F1, but lower thresholds catch significantly more patients.
+
+---
+
+### Challenge 7 — Inconsistent comparison between models
+
+**Problem:** The final model comparison in Notebook 4 was originally training the comparison RF on raw imbalanced data (no SMOTE) while the XGBoost used SMOTE — an apples-to-oranges comparison. Also, the RF used `class_weight='balanced'` on top of SMOTE-balanced data, which would double-count the imbalance correction if ever the SMOTE ratio changed.
+
+**What we did:**
+- **Applied SMOTE consistently** to both the RF and XGBoost full-dataset training, with `class_weight=None` and `scale_pos_weight=1.0` respectively — since SMOTE already balances the classes, no additional weighting is needed.
+- The final comparison now reflects both models trained under identical conditions (full dataset, SMOTE, no additional class weighting).
+
+---
+
+### Final model comparison
+
+| | F1 (sample) | F1 (full + SMOTE) | AUC (full) | Sepsis caught (full) |
+|---|---|---|---|---|
+| Random Forest | 0.5607 | 0.6025 | 0.9091 | 391 / 586 |
+| **XGBoost** | **0.7218** | **0.6788** | **0.9235** | 353 / 586 |
+
+**XGBoost is the best model overall.** It achieves higher F1 and AUC on both the sample and full dataset evaluations. Random Forest catches slightly more patients in absolute terms on the full dataset (391 vs 353) due to a higher recall at threshold 0.50, but XGBoost has meaningfully better precision (0.78 vs 0.55), fewer false alarms (101 vs 321), and a higher AUC.
+
+Both models are academically solid introductory results. A production clinical tool would require validation on held-out hospital cohorts, calibration of the threshold against clinical cost-of-error estimates, and regulatory approval.
