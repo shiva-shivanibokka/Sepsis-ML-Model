@@ -32,7 +32,6 @@ import warnings
 
 import joblib
 import numpy as np
-import pandas as pd
 
 from sepsis_icu import config, data, evaluate, features, models
 
@@ -46,21 +45,27 @@ def _log(msg: str) -> None:
     print(f"[train] {msg}", flush=True)
 
 
-def _finalize(search, X_train_red, y_train, X_tr2, y_tr2, X_val, y_val, X_test_red, y_test):
-    """From a fitted search: recover features, fit the deployable model, calibrate
-    the threshold on the validation split, and score on the held-out test set."""
+def _finalize(search, X_train_red, y_train, X_val, y_val, X_test_red, y_test):
+    """From a search fitted on the tr2 split: recover features, calibrate the
+    threshold on the untouched validation split, refit the deployable model on the
+    FULL training set, and score on the held-out test set.
+
+    The search's ``best_estimator_`` was fitted on X_tr2 only (X_val excluded), so
+    predicting on X_val to choose the threshold uses genuinely unseen data — X_val
+    influenced neither the model fit nor the RFE feature selection. The test set is
+    held out from tuning, selection, threshold choice, and the deployable refit.
+    """
     selected = features.selected_feature_names(search.best_estimator_, X_train_red.columns)
 
-    # Deployable model: refit on the FULL training set (SMOTE-balanced).
+    # Threshold: the tr2-fitted search pipeline predicting on the untouched X_val.
+    val_prob = evaluate.predict_proba_pos(search.best_estimator_, X_val)
+    threshold, _ = evaluate.choose_threshold(y_val, val_prob)
+
+    # Deployable model: refit on the FULL training set (tr2 + val), SMOTE-balanced,
+    # using the features RFE selected on tr2.
     deployable = models.deployable_model_from_search(
         search, X_train_red, y_train, selected
     )
-    # Threshold model: refit on tr2 only, so val is genuinely held out for
-    # threshold selection (choosing the threshold on the test set would leak).
-    thr_model = models.deployable_model_from_search(search, X_tr2, y_tr2, selected)
-    val_prob = evaluate.predict_proba_pos(thr_model, X_val[list(selected)])
-    threshold, _ = evaluate.choose_threshold(y_val, val_prob)
-
     test_prob = evaluate.predict_proba_pos(deployable, X_test_red[list(selected)])
     metrics = evaluate.evaluate_at_threshold(y_test, test_prob, threshold)
     return deployable, list(selected), threshold, metrics
@@ -110,7 +115,10 @@ def main() -> None:
     y_train.to_csv(config.Y_TRAIN_CSV)
     y_test.to_csv(config.Y_TEST_CSV)
 
-    # Validation split (out of training) for threshold calibration only.
+    # Validation split held out of training. Tuning + feature selection run on
+    # X_tr2 ONLY, so X_val is genuinely unseen when we calibrate the threshold on
+    # it (no selection leakage into the threshold). The deployable model is then
+    # refit on the full X_train (tr2 + val); the test set stays untouched throughout.
     X_tr2, X_val, y_tr2, y_val = data.train_test_split(
         X_train, y_train, test_size=0.2, stratify=y_train,
         random_state=config.RANDOM_SEED,
@@ -121,21 +129,21 @@ def main() -> None:
     # memory at a time — fitting both final models while both searches were still
     # alive was a peak-memory spike that could get the process killed.
     _log("tuning Random Forest (GridSearchCV) ...")
-    rf_search = models.tune_random_forest(X_train, y_train)
+    rf_search = models.tune_random_forest(X_tr2, y_tr2)
     _log(f"  best CV F1={rf_search.best_score_:.4f}  params={rf_search.best_params_}")
     rf_cv_f1, rf_best_params = float(rf_search.best_score_), dict(rf_search.best_params_)
     rf_model, rf_feats, rf_thr, rf_metrics = _finalize(
-        rf_search, X_train, y_train, X_tr2, y_tr2, X_val, y_val, X_test, y_test
+        rf_search, X_train, y_train, X_val, y_val, X_test, y_test
     )
     del rf_search
     gc.collect()
 
     _log(f"tuning XGBoost (BayesSearchCV, {args.xgb_iters} iters) ...")
-    xgb_search = models.tune_xgboost(X_train, y_train, n_iter=args.xgb_iters)
+    xgb_search = models.tune_xgboost(X_tr2, y_tr2, n_iter=args.xgb_iters)
     _log(f"  best CV F1={xgb_search.best_score_:.4f}  params={dict(xgb_search.best_params_)}")
     xgb_cv_f1, xgb_best_params = float(xgb_search.best_score_), dict(xgb_search.best_params_)
     xgb_model, xgb_feats, xgb_thr, xgb_metrics = _finalize(
-        xgb_search, X_train, y_train, X_tr2, y_tr2, X_val, y_val, X_test, y_test
+        xgb_search, X_train, y_train, X_val, y_val, X_test, y_test
     )
     del xgb_search
     gc.collect()

@@ -133,7 +133,11 @@ def model_info() -> dict:
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest) -> PredictResponse:
-    """Predict sepsis vs no-sepsis for one patient's aggregated features."""
+    """Predict sepsis vs no-sepsis for one patient's aggregated features.
+
+    Unauthenticated and unthrottled by design (open demo, no sensitive data). Add
+    rate limiting before public exposure — see docs/deploy.md "Hardening".
+    """
     bundle = load_bundle()
     features = bundle["features"]
     threshold = float(bundle.get("threshold", 0.5))

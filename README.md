@@ -12,7 +12,7 @@
 
 - **What it does** — Trains and serves a classifier that flags sepsis in ICU patients from aggregated vital-sign / lab summaries (PhysioNet/CinC 2019, 40,336 patients). One codebase, two front-ends: step-by-step learning notebooks *and* a production-style REST API with an interactive demo page.
 - **Hardest problem solved** — Building an *honest* imbalanced-classification pipeline (~7% sepsis rate) with **no leakage**: feature selection and SMOTE oversampling run **inside** cross-validation, and the decision threshold is calibrated on a validation split — never the test set.
-- **Best held-out result** — XGBoost **F1 = 0.674, ROC-AUC = 0.918** on the 8,068-patient held-out test set (380/586 sepsis cases caught), generated reproducibly by a single `python train.py`. Random Forest: F1 = 0.642, ROC-AUC = 0.920.
+- **Best held-out result** — XGBoost **F1 = 0.660, ROC-AUC = 0.919** on the 8,068-patient held-out test set (371/586 sepsis cases caught), generated reproducibly by a single `python train.py`. Random Forest: F1 = 0.631, ROC-AUC = 0.915.
 
 ---
 
@@ -182,10 +182,10 @@ Produced by a single `python train.py` on the full dataset (40,336 patients → 
 
 | Model | F1 | ROC-AUC | Precision | Recall | Threshold | Sepsis caught |
 |---|---|---|---|---|---|---|
-| **XGBoost (winner)** | **0.6744** | 0.9180 | 0.7024 | 0.6485 | 0.30 | **380 / 586** |
-| Random Forest | 0.6418 | 0.9197 | 0.7078 | 0.5870 | 0.50 | 344 / 586 |
+| **XGBoost (winner)** | **0.6596** | 0.9194 | 0.6883 | 0.6331 | 0.40 | **371 / 586** |
+| Random Forest | 0.6312 | 0.9149 | 0.6825 | 0.5870 | 0.50 | 344 / 586 |
 
-XGBoost confusion matrix: **TP=380, FN=206, FP=161, TN=7,321**.
+XGBoost confusion matrix: **TP=371, FN=215, FP=168, TN=7,314**. Tuning and feature selection run on an 80% training sub-split; the threshold is calibrated on the held-out 20% validation split; the test set is untouched throughout.
 
 **Feature reduction:** 173 candidate features → 156 after label-free filtering (−12 columns >90% null, −5 near-zero variance) → **50** selected by RFE. The most important selected features are **`Lactate_range`, `ICULOS_max`, and `FiO2` summaries** — physiological instability and oxygenation, consistent with recognised sepsis markers.
 

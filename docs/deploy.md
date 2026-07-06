@@ -101,6 +101,21 @@ Logs: `fly logs`.
 
 ---
 
+## Hardening before public exposure
+
+The demo is intentionally minimal. Before putting `/predict` on a public URL, add
+abuse protection — it is unauthenticated and runs model inference per request:
+
+- **Simplest:** rely on the platform. Cloud Run's `--max-instances` and per-instance
+  `--concurrency` bound total load; a WAF / API-gateway rate limit covers per-IP abuse.
+- **In-app (if you want per-IP limits in the code):** add [`slowapi`](https://github.com/laurentS/slowapi),
+  register a `Limiter(key_func=get_remote_address)` on `app.state.limiter`, and decorate
+  `/predict` with e.g. `@limiter.limit("60/minute")`. Left out of the base image on
+  purpose so the demo stays dependency-light until it's actually deployed.
+
+There is no auth on the endpoints by design: the model exposes no sensitive data and
+the demo is meant to be openly clickable. Add auth only if you gate it behind a login.
+
 ## For the resume
 
 The live URL + `$URL/docs` demonstrate: containerization, source-to-Cloud-Run
