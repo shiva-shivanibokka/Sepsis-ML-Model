@@ -1,0 +1,11 @@
+Sepsis_Dataset.csv
+*.ipynb
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+artifacts/*.csv
+artifacts/patient_data.csv
+docs

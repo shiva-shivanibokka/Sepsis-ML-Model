@@ -1,0 +1,31 @@
+# Raw dataset — not committed (large; lives in Google Drive / PhysioNet).
+Sepsis_Dataset.csv
+
+# Generated intermediate splits (large, regenerable by train.py / Notebook 02)
+artifacts/*.csv
+artifacts/patient_data.csv
+rf_best_params.json
+
+# Keep the small, useful artifacts committed so the repo is demo-able without
+# a full retrain (negations re-include them despite the broader ignores above):
+!artifacts/model.joblib
+!artifacts/metrics.json
+!artifacts/examples.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.ruff_cache/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store

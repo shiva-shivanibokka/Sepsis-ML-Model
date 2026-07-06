@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sepsis-icu"
+version = "1.0.0"
+description = "Early sepsis prediction from PhysioNet 2019 ICU vital-sign / lab time-series"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.9"
+# Core runtime: everything needed to train the model AND serve a prediction.
+# Kept lean so the serving image (`.[serve]`) stays small.
+dependencies = [
+    "pandas>=1.5",
+    "numpy>=1.23",
+    "scikit-learn>=1.1",
+    "xgboost>=1.7",
+    "imbalanced-learn>=0.10",
+    "joblib>=1.2",
+]
+
+[project.optional-dependencies]
+serve = ["fastapi>=0.100", "uvicorn[standard]>=0.23", "pydantic>=2.0"]
+# Training/notebook-only libs: plotting + the optional Bayesian search
+# (models.py falls back to RandomizedSearchCV when scikit-optimize is absent).
+# Not installed into the serving image.
+train = ["scikit-optimize>=0.9", "matplotlib>=3.5", "seaborn>=0.12"]
+dev = ["pytest>=7.0", "httpx>=0.24"]
+
+[project.scripts]
+sepsis-train = "train:main"
+
+[tool.setuptools]
+packages = ["sepsis_icu"]
+package-dir = {"" = "src"}
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

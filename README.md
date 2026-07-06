@@ -1,23 +1,138 @@
 # Sepsis Early Prediction — ICU Machine Learning Project
 
-This project builds machine learning models to predict whether a patient in the intensive care unit (ICU) will develop sepsis, using hourly vital sign and lab measurements from the PhysioNet/CinC Challenge 2019 dataset. Two models are built and compared: Random Forest and XGBoost.
+![CI](https://github.com/shiva-shivanibokka/Sepsis-ML-Model/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-**Note:** This is an introductory project intended to help students understand the core concepts and workflow of applied machine learning — data loading, exploratory analysis, preprocessing, feature selection, model training, hyperparameter tuning, and evaluation. The results are modest by design; the focus is on understanding the process, not achieving state-of-the-art performance.
+**Predicts which ICU patients developed sepsis from their vital-sign and lab records — as four teaching notebooks *and* a deployable FastAPI service.**
 
-**Note on model choice:** The raw dataset is a time-series — one row of measurements per hour per patient. The most powerful approach for time-series data would be a dedicated sequence model such as an LSTM or Transformer. However, these architectures have not been covered in this course, so we do not use them here. Instead, we collapse the time-series into a single row per patient using statistical aggregations (min, max, mean, std, range) and apply tabular classifiers (Random Forest and XGBoost) that students are already familiar with. This is a deliberate pedagogical choice, not an oversight — and it is one of the reasons the results are more modest than what a sequence model could achieve on the same data.
+## Recruiter TL;DR
 
-The project is structured as four sequential Jupyter notebooks, designed for students learning applied machine learning. Every step is explained in plain language alongside the code.
+- **What it does:** Trains and serves a classifier that flags sepsis in ICU patients from aggregated vital-sign / lab summaries (PhysioNet/CinC 2019, 40,336 patients), packaged as both a step-by-step learning notebook series and a production-style REST API with an interactive demo page.
+- **Hardest problem solved:** Building an *honest* imbalanced-classification pipeline (~7% sepsis rate) with no leakage — feature selection and SMOTE oversampling run **inside** cross-validation, and the decision threshold is calibrated on a validation split, never the test set.
+- **Best held-out result:** XGBoost, **F1 = 0.674, ROC-AUC = 0.918** on the held-out 8,068-patient test set (380/586 sepsis cases caught) — generated reproducibly by `train.py` with the leakage-free pipeline (RFE + SMOTE inside CV, threshold calibrated on a validation split). Random Forest: F1 = 0.642, ROC-AUC = 0.920.
+
+This repo serves two audiences from one codebase:
+
+1. **Learn** — four sequential Jupyter notebooks explaining every step in plain language (data loading → EDA → preprocessing → Random Forest → XGBoost).
+2. **Ship** — a `src/sepsis_icu/` Python package, a headless `train.py` CLI, and a FastAPI serving layer (`/predict`, `/health`, `/model`, and a live demo page), containerized and deployment-ready.
+
+> **Note (model choice):** The raw data is a time-series (one row per hour per patient). A dedicated sequence model (LSTM/Transformer) would be more powerful, but this project deliberately collapses each stay into one row via statistical aggregations and uses tabular classifiers — a pedagogical choice, and one reason results are modest. **This also makes it a retrospective whole-stay classifier, not a real-time early-warning system** — see [Limitations](#limitations-and-honest-caveats).
 
 ---
 
-## Table of Contents
+## Architecture
+
+The notebooks and the training CLI import the **same** package modules, so there is one implementation of every step. Notebooks are the readable narrative; the package is the source of truth. Full write-up in [`docs/architecture.md`](docs/architecture.md).
+
+```mermaid
+flowchart TD
+    RAW["Sepsis_Dataset.csv<br/>(hourly ICU records)"] --> DATA["data.py<br/>aggregate → one row/patient<br/>stratified split"]
+    DATA --> FEAT["features.py<br/>label-free reduction<br/>+ leakage-free pipeline<br/>(scale → RFE → SMOTE → clf)"]
+    FEAT --> MODELS["models.py<br/>tune RF (GridSearch)<br/>tune XGB (BayesSearch)"]
+    MODELS --> EVAL["evaluate.py<br/>metrics + threshold<br/>calibrated on validation"]
+    EVAL --> TRAIN["train.py (CLI)"]
+    TRAIN --> ART["artifacts/<br/>model.joblib · metrics.json · examples.json"]
+    ART --> SERVE["serve.py (FastAPI)<br/>/predict /health /model /"]
+    SERVE --> DOCKER["Dockerfile → Cloud Run / Fly.io"]
+    NB["01–04 notebooks<br/>(teaching narrative)"] -. import .-> FEAT
+```
+
+**Why this shape?** The original notebooks worked but had three subtle issues a portfolio reviewer would catch: feature selection and threshold choice leaked test information, and the code only ran on Colab. The package fixes all three (selection + SMOTE inside CV, threshold on a validation split, config-driven Colab/local portability) while keeping the notebooks as the teaching front-end. Design tradeoffs are recorded as ADRs in [`docs/architecture.md`](docs/architecture.md).
+
+---
+
+## Skills Demonstrated
+
+- **Production ML / MLOps** — model serving layer (`serve.py`) fully separate from training/notebook code; versioned model artifact baked into the container.
+- **RESTful API design** — FastAPI with `/predict`, `/health`, `/model`, and an interactive HTML demo; typed request/response via Pydantic; OpenAPI docs at `/docs`.
+- **Data engineering / ETL** — hourly time-series → one-row-per-patient aggregation (173 engineered features) with median imputation and variance filtering.
+- **Imbalanced classification** — SMOTE + `class_weight`/`scale_pos_weight`, F1-over-accuracy framing, threshold calibration for a ~7% positive rate.
+- **Leakage-free model selection** — RFE and SMOTE inside cross-validation; threshold chosen on a held-out validation split.
+- **Containerization & Docker** — slim serving image, non-default resource sizing, container healthcheck.
+- **CI/CD** — GitHub Actions running the test suite on Python 3.11 & 3.12 plus a serve-import smoke check.
+- **Observability** — structured JSON prediction logs + `/health` readiness probe.
+- **Testing** — `pytest` suite covering aggregation, feature reduction, the leakage-free pipeline, and the API contract (runs without the dataset via synthetic fixtures).
+- **System design** — documented architecture + Architecture Decision Records.
+
+---
+
+## Quickstart (production pipeline)
+
+```bash
+git clone https://github.com/shiva-shivanibokka/Sepsis-ML-Model.git
+cd Sepsis-ML-Model
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e ".[serve,train,dev]"
+
+# Place Sepsis_Dataset.csv in the repo root (or: export SEPSIS_DATA_DIR=/path/to/folder)
+python train.py                 # trains RF + XGB, writes artifacts/
+uvicorn sepsis_icu.serve:app --reload
+# open http://127.0.0.1:8000  (demo)   http://127.0.0.1:8000/docs  (API)
+```
+
+`train.py` is configurable: `--xgb-iters` (Bayesian search budget), `--variance-threshold`, `--demo-samples`. It writes `artifacts/model.joblib`, `metrics.json`, and `examples.json` (real held-out stays for the demo).
+
+### API usage
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"features": {"ICULOS_max": 48.0, "Lactate_max": 3.1, "Temp_range": 2.4, "...": 0}}'
+# -> {"prediction":"Sepsis","probability_sepsis":0.71,"threshold":0.45,"model_type":"XGBoost"}
+```
+
+`GET /model` returns the exact feature list the model expects and its calibrated threshold. Missing features return `422`.
+
+---
+
+## Project structure
+
+```
+Sepsis-ML-Model/
+├── 01_eda_loading.ipynb        ← teaching notebooks (learn the pipeline)
+├── 02_preprocessing.ipynb
+├── 03_random_forest.ipynb
+├── 04_xgboost.ipynb
+├── src/sepsis_icu/             ← the package (source of truth)
+│   ├── config.py               ← paths, columns, Colab/local auto-detect
+│   ├── data.py                 ← load + per-patient aggregation + split
+│   ├── features.py             ← label-free reduction + leakage-free pipeline
+│   ├── models.py               ← RF (GridSearch) + XGB (BayesSearch) tuning
+│   ├── evaluate.py             ← metrics + validation-based threshold
+│   └── serve.py                ← FastAPI app + interactive demo page
+├── train.py                    ← end-to-end training CLI
+├── tests/                      ← pytest: data, features, API
+├── docs/                       ← architecture.md, deploy.md
+├── Dockerfile · fly.toml       ← containerization + deploy config
+├── .github/workflows/ci.yml    ← CI
+├── requirements.txt · pyproject.toml
+```
+
+---
+
+## Testing
+
+```bash
+pip install -e ".[serve,dev]"
+pytest -q
+```
+
+The suite (`tests/`) covers the aggregation logic, the label-free filters, the leakage-free pipeline ordering + an end-to-end training smoke on synthetic imbalanced data, and the full API contract (health/model/predict, bundle-threshold behaviour, and a regression guard against sklearn feature-name warnings). It uses synthetic fixtures, so **it runs in seconds without the dataset or a trained model**. CI runs it on Python 3.11 and 3.12. Coverage is not formally measured.
+
+## Deployment
+
+**Not yet deployed to a public URL.** The serving stack is deployment-ready: a self-contained `Dockerfile` (model baked in, `$PORT`-aware, healthchecked), a `fly.toml`, and a full Google Cloud Run / Fly.io walkthrough in [`docs/deploy.md`](docs/deploy.md). Once deployed, add the live URL here.
+
+---
+
+## Table of Contents (learning notebooks)
 
 - [Background](#background)
 - [What is Sepsis?](#what-is-sepsis)
 - [The Dataset](#the-dataset)
 - [Class Imbalance](#class-imbalance)
-- [Project Structure](#project-structure)
-- [How to Run](#how-to-run)
+- [How to Run (notebooks)](#how-to-run)
 - [Notebook 1 — Data Loading and EDA](#notebook-1--data-loading-and-eda)
 - [Notebook 2 — Preprocessing and Feature Selection](#notebook-2--preprocessing-and-feature-selection)
 - [Notebook 3 — Random Forest](#notebook-3--random-forest)
@@ -25,6 +140,8 @@ The project is structured as four sequential Jupyter notebooks, designed for stu
 - [Key Design Decisions](#key-design-decisions)
 - [Libraries Used](#libraries-used)
 - [Results Summary](#results-summary)
+- [Limitations and Honest Caveats](#limitations-and-honest-caveats)
+- [License](#license)
 
 ---
 
@@ -121,18 +238,9 @@ Sepsis is a rare event. Only a small fraction of ICU patients develop it. This *
 
 ---
 
-## Project Structure
+## Notebook Data Flow
 
-```
-Sepsis-ML-Model/
-│
-├── 01_eda_loading.ipynb        ← data loading, feature engineering, EDA
-├── 02_preprocessing.ipynb      ← feature selection, train/test split
-├── 03_random_forest.ipynb      ← Random Forest classifier
-└── 04_xgboost.ipynb            ← XGBoost classifier + model comparison
-```
-
-The notebooks must be run **in order**. Each one saves its outputs to Google Drive and the next one reads them.
+The four teaching notebooks must be run **in order**. Each one saves its outputs to Google Drive and the next one reads them. (For the headless, reproducible version of this same pipeline, use `train.py` — see [Quickstart](#quickstart-production-pipeline).)
 
 ```
 01_eda_loading.ipynb
@@ -160,20 +268,26 @@ The notebooks must be run **in order**. Each one saves its outputs to Google Dri
 
 - A Google account with Google Drive
 - Google Colab (free — runs in your browser)
-- The raw dataset `sepsis_dataset.csv` uploaded to a folder on your Google Drive
+- The raw dataset `Sepsis_Dataset.csv` uploaded to a folder on your Google Drive
 
 ### Setup Steps
 
-1. Create a folder on your Google Drive, for example: `My Drive/sepsis_data/`
-2. Upload `sepsis_dataset.csv` into that folder
+1. Create a folder on your Google Drive, for example: `My Drive/Colab Notebooks/Sepsis ML Project/`
+2. Upload `Sepsis_Dataset.csv` into that folder (the filename is case-sensitive on Colab)
 3. Open each notebook in Google Colab
-4. In **each notebook**, find the configuration cell and update `data_dir` to match your folder path:
+4. In **each notebook**, find the configuration cell and update `data_dir` to match your folder path. All four notebooks use the same value — keep them identical:
 
 ```python
-data_dir = Path('/content/drive/MyDrive/sepsis_data')
+data_dir = Path('/content/drive/MyDrive/Colab Notebooks/Sepsis ML Project')
 ```
 
-5. Run the notebooks in order: `01` → `02` → `03` → `04`
+5. Install the pinned dependencies (only `scikit-optimize` and `imbalanced-learn` are not pre-installed in Colab):
+
+```python
+!pip install -r requirements.txt
+```
+
+6. Run the notebooks in order: `01` → `02` → `03` → `04`
 
 ---
 
@@ -399,17 +513,33 @@ We first drop columns with more than 90% missing. Then we impute the remaining m
 | `seaborn` | Plot styling and heatmap |
 | `scikit-learn` | Preprocessing, feature selection, RF, GridSearchCV, metrics |
 | `xgboost` | XGBoost classifier |
+| `imbalanced-learn` | SMOTE oversampling of the minority (sepsis) class |
 | `scikit-optimize` | Bayesian hyperparameter optimisation (`BayesSearchCV`) |
 
-`pandas`, `numpy`, `matplotlib`, `seaborn`, `scikit-learn`, and `xgboost` are pre-installed in Google Colab. Install `scikit-optimize` with:
+`pandas`, `numpy`, `matplotlib`, `seaborn`, `scikit-learn`, and `xgboost` are pre-installed in Google Colab. `imbalanced-learn` and `scikit-optimize` are not. Install the full pinned set with:
 
 ```python
-!pip install scikit-optimize
+!pip install -r requirements.txt
 ```
+
+Exact versions are pinned in `requirements.txt` for reproducibility — the stack is pinned around `scikit-optimize==0.10.2` (its scikit-learn ceiling), so bump the versions together rather than individually.
 
 ---
 
 ## Results Summary
+
+### Reproducible results — `train.py` (full pipeline, leakage-free)
+
+These are produced by a single `python train.py` run on the full 40,336-patient dataset (32,268 train / 8,068 test), using the productionized pipeline: label-free reduction → RFE + SMOTE **inside** cross-validation → threshold calibrated on a validation split → evaluated once on the held-out test set. Regenerate anytime; they are written to `artifacts/metrics.json`.
+
+| Model | F1 | ROC-AUC | Precision | Recall | Threshold | Sepsis caught |
+|---|---|---|---|---|---|---|
+| **XGBoost (winner)** | **0.6744** | 0.9180 | 0.7024 | 0.6485 | 0.30 | **380 / 586** |
+| Random Forest | 0.6418 | 0.9197 | 0.7078 | 0.5870 | 0.50 | 344 / 586 |
+
+Selected features (k=50) are dominated by **Lactate_range, ICULOS_max, and FiO2** summaries — physiological instability and oxygenation, consistent with clinical sepsis markers. Confusion (XGBoost): TP=380, FN=206, FP=161, TN=7,321.
+
+> The numbers below are the **original notebook** results (which include a 5,000-patient sample stage and a slightly different, teaching-oriented tuning setup). They are close to the `train.py` numbers above; the `train.py` figures are the ones to cite, since that pipeline is fully leakage-free and reproducible in one command.
 
 ### Feature Reduction (Notebook 2)
 
@@ -556,3 +686,37 @@ This section documents the challenges encountered during development and every i
 **XGBoost is the best model overall.** It achieves higher F1 and AUC on both the sample and full dataset evaluations. Random Forest catches slightly more patients in absolute terms on the full dataset (391 vs 353) due to a higher recall at threshold 0.50, but XGBoost has meaningfully better precision (0.78 vs 0.55), fewer false alarms (101 vs 321), and a higher AUC.
 
 Both models are academically solid introductory results. A production clinical tool would require validation on held-out hospital cohorts, calibration of the threshold against clinical cost-of-error estimates, and regulatory approval.
+
+---
+
+## Limitations and Honest Caveats
+
+These are deliberately stated up front so the results are not over-read. None of them break the pipeline, but they define exactly what this project is and is not.
+
+### This is a *retrospective whole-stay classifier*, not a real-time early-warning system
+
+Features are aggregated (min/max/mean/std/range) over a patient's **entire** ICU stay — see `01_eda_loading.ipynb`, the `groupby(patient_id).agg(...)` step. The target is `SepsisLabel.max()` (did the patient *ever* become septic). This means a feature such as `Lactate_max` or `Temp_range` can be drawn from hours **after** sepsis onset. The model therefore answers *"does this completed ICU stay show sepsis?"* — it does **not** answer *"given only the first N hours, will this patient develop sepsis?"*, which is what genuine early prediction requires.
+
+The README previously noted this only for `ICULOS_max`; it applies to every aggregated feature. This is an acceptable simplification for a teaching project on tabular classifiers, but the "early prediction" framing should be read with this caveat. **A true early-warning version would aggregate only the measurements available up to a fixed prediction time (e.g. the first 6–12 ICU hours, or up to `t_onset − k` hours) and re-run the whole pipeline.** That is the single most valuable next step if this project is extended.
+
+### The 5,000-patient "sample" baseline numbers are optimistic
+
+The sample is drawn from the full dataset (`02_preprocessing.ipynb`) and then transformed with the imputer/scaler/RFE mask that were fit on the full training set — which overlaps the sample's own test rows. The sample F1 scores are fine as an *illustration* of "less data → worse baseline", but they are **not** a clean held-out estimate. Trust the full-dataset (40,336-patient) numbers for any real comparison.
+
+### Decision threshold is chosen on a validation split, not the test set
+
+Earlier versions of Notebooks 3 and 4 selected the "best" F1 threshold directly on the test set and then reported the F1 at that threshold — a subtle test-set leak (the same class of mistake fixed for RFE in Challenge 4). Both notebooks now carve a **validation split out of the training data**, choose the threshold there, and measure it **once** on the untouched test set. This makes the reported best-threshold F1 an honest out-of-sample number rather than an optimistic in-sample one.
+
+### Feature redundancy
+
+34 of the 50 selected features are `_range` values, which are correlated with each other (an unstable patient tends to have high range across many measurements at once). The model works, but the effective independent signal is smaller than "50 features" suggests.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+## Acknowledgements
+
+Data: [PhysioNet/Computing in Cardiology Challenge 2019 — Early Prediction of Sepsis from Clinical Data](https://physionet.org/content/challenge-2019/). This project is for educational and portfolio purposes and is **not** a validated clinical tool.
