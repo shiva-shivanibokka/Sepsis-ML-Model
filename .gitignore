@@ -6,6 +6,17 @@ artifacts/*.csv
 artifacts/patient_data.csv
 rf_best_params.json
 
+# Notebook-generated intermediates when run locally (data_dir = repo root)
+/patient_data.csv
+/X_train.csv
+/X_test.csv
+/y_train.csv
+/y_test.csv
+/X_train_full.csv
+/X_test_full.csv
+/y_train_full.csv
+/y_test_full.csv
+
 # Keep the small, useful artifacts committed so the repo is demo-able without
 # a full retrain (negations re-include them despite the broader ignores above):
 !artifacts/model.joblib
