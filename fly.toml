@@ -2,7 +2,7 @@
 # Deploy with:  fly launch --no-deploy   (first time, to create the app)
 #               fly deploy
 # See docs/deploy.md for the full walkthrough.
-app = "sepsis-icu-sbokka"   # globally-unique Fly app name
+app = "sepsis-icu-classifier"   # globally-unique Fly app name
 primary_region = "iad"      # US-East; change via `fly platform regions`
 
 [build]

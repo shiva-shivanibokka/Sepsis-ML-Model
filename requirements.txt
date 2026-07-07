@@ -1,11 +1,13 @@
-# Pinned to a mutually-compatible set (verified to coexist).
-# scikit-optimize is the constraint: 0.10.2 supports scikit-learn <= 1.5,
-# so the whole stack is pinned around that. Bump together, not individually.
+# Full local/Colab environment, pinned to the exact versions train.py used to
+# produce the committed artifacts/model.joblib. These MUST match for the pickled
+# model to load (numpy 2.x can't unpickle 1.26 arrays; sklearn pickles are
+# version-sensitive). The serving image uses the leaner requirements-serve.txt.
 numpy==1.26.4
-pandas==2.2.2
-scikit-learn==1.4.2
-xgboost==2.0.3
-imbalanced-learn==0.12.3
+pandas==2.3.3
+scipy==1.17.1
+scikit-learn==1.8.0
+xgboost==3.2.0
+imbalanced-learn==0.14.1
 scikit-optimize==0.10.2
 matplotlib==3.8.4
 seaborn==0.13.2
@@ -15,4 +17,4 @@ seaborn==0.13.2
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 pydantic==2.7.4
-joblib==1.4.2
+joblib==1.5.3

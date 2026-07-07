@@ -6,6 +6,10 @@
 
 **Predicts which ICU patients developed sepsis from their vital-sign and lab records — delivered as both a four-notebook teaching series and a deployable FastAPI service with a live demo.**
 
+### 🔗 Live demo: **[sepsis-icu-classifier.fly.dev](https://sepsis-icu-classifier.fly.dev)**  ·  [API docs](https://sepsis-icu-classifier.fly.dev/docs)  ·  [/model](https://sepsis-icu-classifier.fly.dev/model)
+
+Deployed on Fly.io (scales to zero — the first request after idle takes a few seconds to cold-start).
+
 ---
 
 ## Recruiter TL;DR
@@ -230,12 +234,28 @@ The suite covers the aggregation logic, the label-free filters, the leakage-free
 
 ## Deployment
 
-**Not yet deployed to a public URL.** The serving stack is deployment-ready: a self-contained `Dockerfile` (model baked in, `$PORT`-aware, healthchecked), a `fly.toml`, and a full Google Cloud Run / Fly.io walkthrough in [`docs/deploy.md`](docs/deploy.md). Once deployed, the live URL goes here.
+**Live on Fly.io: [https://sepsis-icu-classifier.fly.dev](https://sepsis-icu-classifier.fly.dev)** (scales to zero; first request cold-starts). The serving stack is a self-contained `Dockerfile` (model baked in, `$PORT`-aware, healthchecked on `/health`); `docs/deploy.md` has the full Fly.io and Google Cloud Run walkthroughs.
+
+Reproduce the deploy (from a repo with a trained `artifacts/model.joblib`):
+
+```bash
+fly auth login
+fly apps create <your-unique-name>      # then set app = "<your-unique-name>" in fly.toml
+fly deploy --remote-only                # remote build, no local Docker needed
+```
+
+Run the container locally instead:
 
 ```bash
 docker build -t sepsis-icu .
-docker run -p 8000:8000 sepsis-icu     # → http://localhost:8000
+docker run -p 8000:8000 sepsis-icu       # → http://localhost:8000
 ```
+
+> **Serving-env note:** the model is a pickle, so the image installs a *pinned* lock
+> (`requirements-serve.txt`) matching the exact versions that trained it, and adds the
+> package with `pip install --no-deps` so nothing upgrades past them. It also sets
+> `SEPSIS_ARTIFACTS_DIR=/app/artifacts` so the pip-installed package finds the baked-in
+> model. Regenerate the model and `requirements-serve.txt` together.
 
 ---
 

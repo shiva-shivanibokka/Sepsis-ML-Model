@@ -11,14 +11,18 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Package source + metadata, then install with ONLY the serving deps. `.[serve]`
-# pulls the lean core (pandas/numpy/scikit-learn/xgboost/imbalanced-learn/joblib)
-# plus fastapi/uvicorn/pydantic — and deliberately NOT the training/notebook libs
-# (matplotlib, seaborn, scikit-optimize), which the runtime never imports. Keeps
-# the image small and cold starts fast.
-COPY pyproject.toml README.md LICENSE ./
+# Install a PINNED serving lock, then the package itself with --no-deps. This is
+# deliberate: the model artifact is a pickle, so the serving env must match the
+# versions that created it (numpy 2.x cannot unpickle arrays written by 1.26, and
+# sklearn pickles are version-sensitive). Using `.[serve]` here would let pip
+# resolve the pyproject ranges to the latest releases and break model loading.
+# requirements-serve.txt covers everything the runtime imports (including
+# imbalanced-learn, pulled transitively when the package __init__ imports
+# features/models) but NOT the train-only libs (matplotlib, seaborn, scikit-optimize).
+COPY requirements-serve.txt pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN pip install --no-cache-dir ".[serve]"
+RUN pip install --no-cache-dir -r requirements-serve.txt \
+    && pip install --no-cache-dir --no-deps .
 
 # Bake in the trained model + demo samples (small). Build fails here if you
 # haven't run `python train.py` yet — the desired safety check.
@@ -26,6 +30,12 @@ COPY artifacts/model.joblib ./artifacts/model.joblib
 COPY artifacts/examples.json ./artifacts/examples.json
 
 EXPOSE 8000
+
+# Point the app at the baked-in artifacts. Required because the package is
+# pip-installed into site-packages, so config._default_data_dir() (which resolves
+# relative to the package's __file__) would otherwise look in the Python lib dir
+# instead of /app/artifacts where the model + demo data are COPYed above.
+ENV SEPSIS_ARTIFACTS_DIR=/app/artifacts
 
 # Listen on $PORT when the platform provides one (Cloud Run injects PORT=8080),
 # else default to 8000 for local runs and Fly.

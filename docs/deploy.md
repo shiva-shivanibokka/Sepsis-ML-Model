@@ -4,8 +4,20 @@ The FastAPI service ships as a self-contained Docker image (the trained model is
 baked in), so it runs on any container platform. Two paths are documented:
 **Google Cloud Run** (primary) and **Fly.io** (alternative).
 
-> Not yet deployed to a public URL. After your first deploy, paste the live URL
-> here and in the README so the demo is one click away.
+**Live:** https://sepsis-icu-classifier.fly.dev (Fly.io, scales to zero).
+
+> Two things that will 500 a freshly-deployed image if you skip them (both are
+> handled in this repo's Dockerfile — noted here so a fork doesn't relearn them):
+>
+> 1. **Pin the serving deps to the model's training versions.** `model.joblib` is a
+>    pickle; numpy 2.x cannot unpickle arrays written by 1.26, and sklearn pickles are
+>    version-sensitive. The image installs `requirements-serve.txt` (exact pins) then
+>    `pip install --no-deps .` — never `.[serve]`, which resolves ranges to the latest.
+> 2. **Tell the app where the baked-in model is.** The package is pip-installed into
+>    site-packages, so `config`'s `__file__`-relative default points at the Python lib
+>    dir, not `/app/artifacts`. The Dockerfile sets `ENV SEPSIS_ARTIFACTS_DIR=/app/artifacts`.
+>    Symptom if missing: `/health` still returns 200 (`model_available: false`) but
+>    `/model` and `/predict` 500.
 
 ## Prerequisites
 
