@@ -105,6 +105,14 @@ MODEL_PATH: Path = ARTIFACTS_DIR / "model.joblib"
 METRICS_PATH: Path = ARTIFACTS_DIR / "metrics.json"
 EXAMPLES_PATH: Path = ARTIFACTS_DIR / "examples.json"  # real samples for the demo UI
 
+# The serving copy of the same model, in XGBoost's own cross-version format
+# plus the scaler's two arrays as plain JSON. `export_serving.py` writes these
+# only after they reproduce the pipeline's probabilities exactly. Serving from
+# them needs xgboost + numpy — no scikit-learn, no pandas, and no pickle, so a
+# version bump in the runtime cannot silently change a prediction.
+MODEL_UBJ_PATH: Path = ARTIFACTS_DIR / "model.ubj"
+SERVING_META_PATH: Path = ARTIFACTS_DIR / "serving.json"
+
 
 def ensure_artifacts_dir() -> Path:
     """Create the artifacts directory if needed and return it."""

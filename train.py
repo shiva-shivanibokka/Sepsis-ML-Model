@@ -198,16 +198,44 @@ def main() -> None:
     _log(f"done in {time.time() - t0:.0f}s")
 
 
+def _threshold_sweep(model, feats, X_test, y_test, step=0.01) -> dict:
+    """Confusion counts at every decision threshold from 0 to 1.
+
+    The demo page lets you drag the alarm line, and the four counts underneath
+    have to be the real ones rather than an interpolation. Scoring the test set
+    once and tabulating 101 thresholds costs ~2 KB in the payload; shipping all
+    8,068 probabilities to the browser to recompute would cost 40x that.
+    """
+    prob = evaluate.predict_proba_pos(model, X_test[feats])
+    y = np.asarray(y_test).astype(int)
+    pos, neg = prob[y == 1], prob[y == 0]
+    n_pos, n_neg = len(pos), len(neg)
+
+    grid = np.round(np.arange(0.0, 1.0 + step / 2, step), 4)
+    tp = [int((pos >= t).sum()) for t in grid]
+    fp = [int((neg >= t).sum()) for t in grid]
+    return {
+        "step": float(step),
+        "n_pos": int(n_pos),
+        "n_neg": int(n_neg),
+        # fn = n_pos - tp and tn = n_neg - fp, so only two arrays travel.
+        "tp": tp,
+        "fp": fp,
+    }
+
+
 def _build_demo(model, feats, thr, metrics, winner, X_train, X_test, y_test,
                 n_cand, n_samples) -> dict:
     """Assemble the JSON the landing page reads: importances, per-feature stats,
     and a stratified subset of real held-out stays for the picker."""
     clf = model.named_steps["clf"]
     importances = getattr(clf, "feature_importances_", np.zeros(len(feats)))
+    # All of them, ranked — the demo sheet orders its rows by what the model
+    # actually leaned on, so it needs a weight for every feature, not a top-8.
     top = sorted(
         ({"feature": f, "weight": round(float(w), 4)} for f, w in zip(feats, importances)),
         key=lambda d: abs(d["weight"]), reverse=True,
-    )[:8]
+    )
 
     cm = metrics["confusion"]
     accuracy = (cm["tp"] + cm["tn"]) / max(1, sum(cm.values()))
@@ -248,11 +276,21 @@ def _build_demo(model, feats, thr, metrics, winner, X_train, X_test, y_test,
             "n_candidates": int(n_cand),
             "n_demo_samples": len(samples),
         },
+        # q25/q75 bound the band the demo draws ("the middle half of the training
+        # cohort"); q01/q99 bound the rail it is drawn on. Quantiles rather than
+        # mean +/- SD because these features are heavily skewed — lactate's mean
+        # sits well below its own upper tail, so an SD band would put most septic
+        # patients off the end of the rail.
         "stats": {
             f: {"mean": round(float(X_train[f].mean()), 4),
-                "std": round(float(X_train[f].std()) or 1.0, 4)}
+                "std": round(float(X_train[f].std()) or 1.0, 4),
+                "q01": round(float(X_train[f].quantile(0.01)), 4),
+                "q25": round(float(X_train[f].quantile(0.25)), 4),
+                "q75": round(float(X_train[f].quantile(0.75)), 4),
+                "q99": round(float(X_train[f].quantile(0.99)), 4)}
             for f in feats
         },
+        "sweep": _threshold_sweep(model, feats, X_test, y_test),
         "samples": samples,
     }
 

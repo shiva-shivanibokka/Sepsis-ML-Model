@@ -1,18 +1,21 @@
-# Pinned serving lock — MUST match the versions that pickled artifacts/model.joblib,
-# or joblib.load fails in the container (numpy 2.x can't unpickle arrays written by
-# 1.26, sklearn pickles are version-sensitive, etc.). These are the exact versions
-# train.py used. Regenerate the model and these pins together.
+# Serving requirements for the container image.
 #
-# The Dockerfile installs from this file and then `pip install --no-deps .`, so pip
-# never re-resolves to newer releases. imbalanced-learn is required transitively:
-# importing the sepsis_icu package runs __init__ -> features/models, which import it.
-numpy==1.26.4
-pandas==2.3.3
-scipy==1.17.1
-scikit-learn==1.8.0
-xgboost==3.2.0
-imbalanced-learn==0.14.1
-joblib==1.5.3
-fastapi==0.111.0
-uvicorn[standard]==0.30.1
-pydantic==2.7.4
+# This file used to be an exact lock, because the served artifact was a pickle
+# and a pickle only loads under the versions that wrote it — numpy 2.x cannot
+# unpickle arrays written by 1.26, scikit-learn pickles break across minor
+# releases, and the pinned XGBoost build was not even on PyPI, so the lock could
+# not actually be installed from a clean environment.
+#
+# The service now loads artifacts/model.ubj through XGBoost's own loader, which
+# is documented as stable across library versions, and applies the scaler from
+# artifacts/serving.json as plain arithmetic. Nothing is unpickled, so ranges are
+# safe and scikit-learn, pandas, scipy-via-sklearn, joblib and imbalanced-learn
+# are no longer part of the runtime at all.
+#
+# Regenerate artifacts/model.ubj + serving.json with `python export_serving.py`,
+# which refuses to write them unless they reproduce the trained pipeline exactly.
+numpy>=1.24,<3
+xgboost>=2.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6

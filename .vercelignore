@@ -1,0 +1,14 @@
+# The function only needs src/ and the small artifacts. Everything below is
+# either huge, regenerable, or training-only.
+*.csv
+*.ipynb
+artifacts/*.csv
+artifacts/model.joblib
+docs/
+tests/
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.egg-info/

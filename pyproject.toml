@@ -4,28 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sepsis-icu"
-version = "1.0.0"
+version = "1.1.0"
 description = "Early sepsis prediction from PhysioNet 2019 ICU vital-sign / lab time-series"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.9"
-# Core runtime: everything needed to train the model AND serve a prediction.
-# Kept lean so the serving image (`.[serve]`) stays small.
+requires-python = ">=3.10"
+# Serving only. The deployed function loads artifacts/model.ubj through XGBoost's
+# own loader and applies the scaler from artifacts/serving.json as two numpy
+# operations, so scikit-learn, pandas, joblib and imbalanced-learn are all
+# training-time dependencies and stay out of the deployment. `export_serving.py`
+# is what makes that safe: it refuses to write those artifacts unless they
+# reproduce the trained pipeline's probabilities exactly.
 dependencies = [
-    "pandas>=1.5",
-    "numpy>=1.23",
-    "scikit-learn>=1.1",
-    "xgboost>=1.7",
-    "imbalanced-learn>=0.10",
-    "joblib>=1.2",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "numpy>=1.24",
+    "xgboost>=2.0",
 ]
 
 [project.optional-dependencies]
-serve = ["fastapi>=0.100", "uvicorn[standard]>=0.23", "pydantic>=2.0"]
-# Training/notebook-only libs: plotting + the optional Bayesian search
-# (models.py falls back to RandomizedSearchCV when scikit-optimize is absent).
-# Not installed into the serving image.
-train = ["scikit-optimize>=0.9", "matplotlib>=3.5", "seaborn>=0.12"]
+# Everything the notebooks and train.py need, including the libraries required to
+# read the training pickle and to run export_serving.py.
+train = [
+    "pandas>=1.5",
+    "scikit-learn>=1.1",
+    "imbalanced-learn>=0.10",
+    "joblib>=1.2",
+    "scikit-optimize>=0.9",
+    "matplotlib>=3.5",
+    "seaborn>=0.12",
+]
 dev = ["pytest>=7.0", "httpx>=0.24"]
 
 [project.scripts]
