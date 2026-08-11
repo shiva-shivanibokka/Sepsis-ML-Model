@@ -1,14 +1,20 @@
 # Sepsis Early Prediction — ICU Machine Learning Project
 
 ![CI](https://github.com/shiva-shivanibokka/Sepsis-ML-Model/actions/workflows/ci.yml/badge.svg)
-![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 **Predicts which ICU patients developed sepsis from their vital-sign and lab records — delivered as both a four-notebook teaching series and a deployable FastAPI service with a live demo.**
 
-### 🔗 Live demo: **[sepsis-icu-classifier.fly.dev](https://sepsis-icu-classifier.fly.dev)**  ·  [API docs](https://sepsis-icu-classifier.fly.dev/docs)  ·  [/model](https://sepsis-icu-classifier.fly.dev/model)
+### 🔗 Live demo: **[sepsis-icu-classifier.vercel.app](https://sepsis-icu-classifier.vercel.app)**  ·  [API docs](https://sepsis-icu-classifier.vercel.app/docs)  ·  [/model](https://sepsis-icu-classifier.vercel.app/model)
 
-Deployed on Fly.io (scales to zero — the first request after idle takes a few seconds to cold-start).
+Serverless on Vercel, ~150 ms per prediction. The demo is an **ICU observation sheet**: pick
+any of 80 real held-out stays and all 50 values the model reads are laid out in one flowsheet,
+ordered by how much the model leans on each, with every value pinned against the middle half of
+the training cohort. The decision threshold is a draggable nomogram — move the alarm line and the
+tally of caught, missed and false-alarmed patients recounts against the real 8,068-patient test
+set. Every number on the page is measured; nothing is illustrative except the rhythm strip, which
+says so.
 
 ---
 
@@ -41,7 +47,7 @@ It was built as a **teaching project** (to learn the full applied-ML workflow en
 - **Two tuned models, honestly compared** — Random Forest (GridSearchCV) and XGBoost (Bayesian optimisation), evaluated identically on the same held-out test set.
 - **Imbalance handled correctly** — SMOTE inside CV, F1-first evaluation, and a decision threshold tuned on validation.
 - **FastAPI serving layer** — `/predict`, `/health`, `/model`, auto-generated OpenAPI docs at `/docs`, and an interactive HTML demo that runs real held-out patients through the live model.
-- **Production tooling** — containerized (Docker), deploy configs (Fly.io / Cloud Run), CI (GitHub Actions), structured JSON prediction logs, and a `pytest` suite that runs without the dataset.
+- **Production tooling** — serverless deploy (Vercel) plus a container path (Docker / Cloud Run), a model export gated on numerical agreement with the trained pipeline, CI (GitHub Actions), structured JSON prediction logs, and a `pytest` suite that runs without the dataset.
 
 ---
 
@@ -56,9 +62,10 @@ flowchart TD
     FEAT --> MODELS["models.py<br/>RF (GridSearchCV)<br/>XGB (BayesSearchCV)"]
     MODELS --> EVAL["evaluate.py<br/>metrics + threshold<br/>calibrated on validation"]
     EVAL --> TRAIN["train.py (CLI)"]
-    TRAIN --> ART["artifacts/<br/>model.joblib · metrics.json · examples.json"]
-    ART --> SERVE["serve.py (FastAPI)<br/>/ /health /model /predict"]
-    SERVE --> DOCKER["Dockerfile → Cloud Run / Fly.io"]
+    TRAIN --> ART["artifacts/<br/>model.joblib · metrics.json<br/>examples.json"]
+    ART --> EXPORT["export_serving.py<br/>model.ubj + serving.json<br/>(gated on exact agreement)"]
+    EXPORT --> SERVE["serve.py (FastAPI)<br/>/ /health /model /predict"]
+    SERVE --> DEPLOY["Vercel (serverless)<br/>· Dockerfile → Cloud Run"]
     NB["01–04 notebooks<br/>(teaching narrative)"] -. import .-> FEAT
 ```
 
@@ -76,7 +83,7 @@ flowchart TD
 | Imbalance | imbalanced-learn (SMOTE) | Oversampling **inside** the CV pipeline (needs imblearn's `Pipeline`) |
 | Tuning | scikit-optimize (`BayesSearchCV`) | Searches continuous ranges with fewer fits than grid search; falls back to `RandomizedSearchCV` if absent |
 | Serving | FastAPI + Uvicorn + Pydantic | Typed request/response, free OpenAPI docs, async-ready |
-| Packaging / infra | setuptools, Docker, Fly.io / Cloud Run, GitHub Actions | Reproducible install, containerized deploy, CI |
+| Packaging / infra | setuptools, Vercel (serverless), Docker / Cloud Run, GitHub Actions | Reproducible install, serverless + containerized deploy, CI |
 
 Exact versions are pinned in [`requirements.txt`](requirements.txt); the package's dependency ranges are in [`pyproject.toml`](pyproject.toml). The stack is pinned around `scikit-optimize`'s scikit-learn ceiling, so bump versions together rather than individually.
 
@@ -85,7 +92,7 @@ Exact versions are pinned in [`requirements.txt`](requirements.txt); the package
 ## Skills Demonstrated
 
 - **Production ML / MLOps** — serving layer fully separate from training/notebook code; versioned model artifact baked into the container.
-- **RESTful API design** — FastAPI with 4 endpoints + interactive demo; typed Pydantic contracts; OpenAPI docs.
+- **RESTful API design** — FastAPI with 4 endpoints + interactive demo; typed Pydantic contracts; OpenAPI docs; model loading kept lazy so the readiness probe and landing page never pay for it.
 - **Data engineering / ETL** — hourly time-series → one-row-per-patient aggregation (173 engineered features) with median imputation and variance filtering.
 - **Imbalanced classification** — SMOTE, F1-over-accuracy framing, threshold calibration for a ~7% positive rate.
 - **Leakage-free model selection** — RFE + SMOTE inside cross-validation; threshold chosen on a held-out validation split.
@@ -105,15 +112,18 @@ Exact versions are pinned in [`requirements.txt`](requirements.txt); the package
 git clone https://github.com/shiva-shivanibokka/Sepsis-ML-Model.git
 cd Sepsis-ML-Model
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
-pip install -e ".[serve,train,dev]"
+pip install -e ".[train,dev]"        # serving deps come with the base install
 
 # Place Sepsis_Dataset.csv in the repo root, or: export SEPSIS_DATA_DIR=/path/to/folder
 python train.py                  # trains RF + XGB, writes artifacts/
+python export_serving.py         # verifies + writes the serving copy of the model
 uvicorn sepsis_icu.serve:app --reload
 # → http://127.0.0.1:8000  (demo)     http://127.0.0.1:8000/docs  (API)
 ```
 
-`train.py` flags: `--xgb-iters` (Bayesian search budget), `--variance-threshold`, `--demo-samples`. It writes `artifacts/model.joblib`, `metrics.json`, and `examples.json` (real held-out stays for the demo). A committed model artifact ships in the repo, so you can serve the demo **without** retraining.
+`train.py` flags: `--xgb-iters` (Bayesian search budget), `--variance-threshold`, `--demo-samples`. It writes `artifacts/model.joblib`, `metrics.json`, and `examples.json` — the last holding 80 real held-out stays, per-feature training quantiles, all 50 feature importances, and the confusion counts at 101 decision thresholds, which is what lets the demo's alarm line be dragged over real numbers.
+
+`export_serving.py` then turns the pickle into the pair the service actually loads (`model.ubj` + `serving.json`) and **exits non-zero if they disagree with it** — see [Deployment](#deployment). Both are committed, so you can serve the demo **without** retraining; the API also falls back to `model.joblib` if they are missing.
 
 ### Option B — run the teaching notebooks (Google Colab)
 
@@ -139,7 +149,18 @@ curl -X POST http://127.0.0.1:8000/predict \
 # → {"prediction":"Sepsis","probability_sepsis":0.71,"threshold":0.30,"model_type":"XGBoost"}
 ```
 
-`GET /model` returns the exact feature list the model expects and its calibrated threshold; a request missing any feature returns `422`. `GET /health` is the readiness probe. The demo page (`/`) lets you click a real held-out ICU stay and watch the model read its signals live.
+`GET /model` returns the exact feature list the model expects, its calibrated threshold, and which of the two model forms was loaded; a request missing any feature returns `422`. `GET /health` is the readiness probe and does **not** load the model, so it stays fast on a cold instance.
+
+### The demo page
+
+`/` is laid out as an ICU observation sheet rather than a dashboard, because that is the artefact these numbers really come from:
+
+- **One flowsheet, all 50 observations, ordered by model weight.** Nothing is hidden behind a toggle. Each row carries its clinical name, its raw column name, the organ system it belongs to, and how hard the model leans on it.
+- **Every value pinned against the cohort.** The grey block on each rail is the 25th–75th percentile of the *training* patients — a cohort range, deliberately not presented as a clinical reference range. Red marks a value outside it. Where a block is a sliver, three quarters of the cohort recorded the same value, which is the honest shape of the *swing* columns.
+- **The threshold is the interaction.** The alarm line is a draggable nomogram. Confusion counts at all 101 thresholds are computed over the real 8,068-patient test set at build time and baked into the page, so dragging it recounts measured numbers — drop it to 0.20 and you watch 47 more sepsis cases caught against 168 more false alarms. Keyboard-operable, not mouse-only.
+- **It shows its misses.** Draw a patient who developed sepsis and the model will sometimes score them 0.13 and stamp "No sepsis"; the page says *Wrong — a miss, the alarm stayed silent* rather than quietly picking flattering examples.
+- **Twelve help buttons**, one on every number and every control, explaining what it means or how to work it.
+- **One thing on the page is illustrative and says so:** the rhythm strip's beat spacing is the patient's recorded mean heart rate, but the beat shape is drawn — the Challenge data holds hourly summaries, never waveforms.
 
 **Use the package directly:**
 
@@ -170,10 +191,13 @@ Sepsis-ML-Model/
 │   ├── evaluate.py             ← metrics + validation-based threshold
 │   └── serve.py                ← FastAPI app + interactive demo page
 ├── train.py                    ← end-to-end training CLI
-├── artifacts/                  ← model.joblib · metrics.json · examples.json (CSVs git-ignored)
-├── tests/                      ← pytest: data, features, API
+├── export_serving.py           ← pipeline → model.ubj + serving.json, verified
+├── api/index.py                ← Vercel entrypoint (ASGI app)
+├── artifacts/                  ← model.joblib · model.ubj · serving.json ·
+│                                  metrics.json · examples.json (CSVs git-ignored)
+├── tests/                      ← pytest: data, features, API (both runtimes)
 ├── docs/                       ← architecture.md (ADRs), deploy.md
-├── Dockerfile · fly.toml       ← containerization + deploy config
+├── Dockerfile · vercel.json    ← container + serverless deploy config
 ├── .github/workflows/ci.yml    ← CI
 └── requirements.txt · pyproject.toml
 ```
@@ -228,34 +252,70 @@ pip install -e ".[serve,dev]"
 pytest -q     # 18 tests
 ```
 
-The suite covers the aggregation logic, the label-free filters, the leakage-free pipeline ordering + an end-to-end training smoke on synthetic imbalanced data, and the full API contract (health/model/predict, calibrated-threshold behaviour, and a regression guard against sklearn feature-name warnings). It uses synthetic fixtures, so it **runs in seconds without the dataset or a trained model**. CI runs it on Python 3.11 and 3.12. Coverage is not formally measured.
+The suite covers the aggregation logic, the label-free filters, the leakage-free pipeline ordering + an end-to-end training smoke on synthetic imbalanced data, and the full API contract. The API tests run against **both** serving paths — the exported `model.ubj` the deployment uses and the pickle fallback — including a check that the two score identically and a regression guard against sklearn feature-name warnings on the fallback. They use synthetic fixtures, so they **run in seconds without the dataset or a trained model**. CI runs it on Python 3.11 and 3.12. Coverage is not formally measured.
 
 ---
 
 ## Deployment
 
-**Live on Fly.io: [https://sepsis-icu-classifier.fly.dev](https://sepsis-icu-classifier.fly.dev)** (scales to zero; first request cold-starts). The serving stack is a self-contained `Dockerfile` (model baked in, `$PORT`-aware, healthchecked on `/health`); `docs/deploy.md` has the full Fly.io and Google Cloud Run walkthroughs.
+**Live at [https://sepsis-icu-classifier.vercel.app](https://sepsis-icu-classifier.vercel.app)** —
+serverless on Vercel, ~150 ms median per prediction, no cold-start wait on the page itself.
 
-Reproduce the deploy (from a repo with a trained `artifacts/model.joblib`):
+### Why the deployed service does not load the trained pickle
+
+`train.py` saves a pickled scikit-learn `Pipeline`. Serving that pickle directly has two costs:
+
+1. **It drags the training stack into production.** scikit-learn, pandas, scipy, joblib and
+   imbalanced-learn all have to be installed just to call `predict_proba`.
+2. **It pins the runtime to the exact versions that wrote it.** This repo's original
+   `requirements-serve.txt` locked `xgboost==3.2.0` — a build that is not on PyPI at all, so the
+   lock could never have been installed from a clean environment. Relaxing it instead would have
+   meant unpickling under versions that did not create the file.
+
+So `export_serving.py` writes the model twice over, in formats with no pickle in them:
+
+| File | What it is |
+| --- | --- |
+| `artifacts/model.ubj` | the booster in XGBoost's own binary format, which is stable across library versions |
+| `artifacts/serving.json` | the scaler's `mean_` / `scale_`, the feature order, the threshold, the class names |
+
+Standardising is then two numpy operations, so the deployed function needs **xgboost and numpy
+and nothing else**:
+
+| Serving stack | Unpacked |
+| --- | --- |
+| scikit-learn + XGBoost + pandas + scipy + joblib + imbalanced-learn | ~525 MB — over Vercel's 500 MB function limit |
+| xgboost-cpu + numpy (+ FastAPI) | ~200 MB |
+
+Two details did the work. `xgboost-cpu` is the same library without the bundled CUDA runtime —
+23 MB unpacked against 84 MB — and the package's `__init__` had to stop eagerly importing the
+training modules, since that alone pulled scikit-learn back in on every import of `serve`.
+
+**The swap is gated, not assumed.** `export_serving.py` re-scores 80 demo patients and 2,000
+random rows drawn across each feature's training range through *both* the original pipeline and
+the exported pair, and refuses to write anything unless they agree — max |Δ P(sepsis)| **0.0**,
+zero label flips at the 0.40 threshold. The same 0.0 agreement holds live: all 80 demo patients
+scored against the deployed service match the local pipeline exactly.
+
+Reproduce the deploy:
 
 ```bash
-fly auth login
-fly apps create <your-unique-name>      # then set app = "<your-unique-name>" in fly.toml
-fly deploy --remote-only                # remote build, no local Docker needed
+python train.py                          # writes artifacts/model.joblib
+python export_serving.py                 # verifies, then writes model.ubj + serving.json
+npx vercel deploy --prod                 # api/index.py is the ASGI entrypoint
 ```
 
-Run the container locally instead:
+Run the container instead — the `Dockerfile` still builds a self-contained serving image
+(`$PORT`-aware, healthchecked on `/health`); `docs/deploy.md` has the Cloud Run walkthrough:
 
 ```bash
 docker build -t sepsis-icu .
 docker run -p 8000:8000 sepsis-icu       # → http://localhost:8000
 ```
 
-> **Serving-env note:** the model is a pickle, so the image installs a *pinned* lock
-> (`requirements-serve.txt`) matching the exact versions that trained it, and adds the
-> package with `pip install --no-deps` so nothing upgrades past them. It also sets
-> `SEPSIS_ARTIFACTS_DIR=/app/artifacts` so the pip-installed package finds the baked-in
-> model. Regenerate the model and `requirements-serve.txt` together.
+> **Serving-env note:** the container sets `SEPSIS_ARTIFACTS_DIR=/app/artifacts` so the
+> pip-installed package finds the baked-in model. It no longer needs a pinned lock:
+> nothing is unpickled, so `requirements-serve.txt` is a set of ranges.
 
 ---
 
