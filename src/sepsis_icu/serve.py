@@ -347,10 +347,13 @@ _LANDING_PAGE = """<!doctype html>
   body{margin:0;background:#FFFFFF;color:var(--ink);font-family:var(--sans);
     line-height:1.55;-webkit-font-smoothing:antialiased}
 
-  .sheet{max-width:1180px;margin:2.2rem auto 3rem;background:var(--paper);
+  .sheet{margin:2.2rem 2in 3rem;background:var(--paper);
     border:1.5px solid var(--edge);container-type:inline-size;
     box-shadow:0 2px 4px rgba(20,30,39,.04),0 24px 56px -28px rgba(20,30,39,.28)}
-  @media(max-width:1240px){.sheet{margin:0 auto;border-left:none;border-right:none}}
+  /* Below ~1000px a pair of 2in gutters would leave less page than margin, so
+     they fall back to a proportional one, then to the full width. */
+  @media(max-width:1000px){.sheet{margin-left:5vw;margin-right:5vw}}
+  @media(max-width:560px){.sheet{margin:0;border-left:none;border-right:none}}
 
   /* ---- form bar ---- */
   .formbar{display:flex;align-items:baseline;gap:.9rem;flex-wrap:wrap;
@@ -430,8 +433,14 @@ _LANDING_PAGE = """<!doctype html>
     border-bottom:1px solid var(--edge);
     font:600 .62rem/1.4 var(--mono);letter-spacing:.15em;text-transform:uppercase;
     color:var(--soft);position:sticky;top:0;background:var(--paper);z-index:5}
+  .cols .c2{display:flex;align-items:center;gap:.4rem}
   .cols .c3{margin:0 .9rem;display:flex;align-items:center;gap:.4rem}
   .cols .c4,.cols .c5{display:flex;align-items:center;gap:.4rem;justify-content:flex-end}
+  .legend{margin:1.35rem 1.6rem 0;padding-left:.85rem;border-left:2px solid var(--rule);
+    color:var(--soft);font-size:.87rem;line-height:1.6}
+  .legend b{color:var(--ink);font-weight:600}
+  .legend code{font:.82rem/1 var(--mono);color:var(--ink);background:#F1F5F7;
+    padding:.1rem .3rem;border-radius:2px}
   .row{padding:.34rem 1.6rem;border-bottom:1px solid var(--rule)}
   .row:nth-child(even){background:#FAFCFD}
   .row.driver{background:#FFF8F7}
@@ -483,6 +492,7 @@ _LANDING_PAGE = """<!doctype html>
     .rail{grid-area:r;margin:.1rem 0 0 .65rem}
     .wt{grid-area:w;justify-content:flex-start;margin:0 0 0 .65rem}
     .key{padding:.7rem 1rem}
+    .legend{margin-left:1rem;margin-right:1rem}
     .idx,.stripwrap{padding-left:1rem;padding-right:1rem}
     .hdr,.formbar{padding-left:1rem;padding-right:1rem}
     .nomo,.tally{padding-left:1rem;padding-right:1rem}
@@ -620,8 +630,16 @@ _LANDING_PAGE = """<!doctype html>
     </div>
   </div>
 
+  <p class="legend">Every row is <b>one signal, summarised over the whole stay</b>. The
+    records behind this are hourly, so each signal collapses to its
+    <b>lowest</b>, <b>peak</b>, <b>average</b>, <b>variability</b> (its standard deviation
+    across the stay) and <b>swing</b> (peak minus lowest). So
+    <code>LACTATE_RANGE&nbsp;6.95</code> reads: <i>this patient's lactate travelled 6.95 mmol/L
+    between its lowest and highest reading</i>. The model sees only these summaries, never
+    the hour-by-hour record they came from.</p>
+
   <div class="cols">
-    <span></span><span>Observation</span>
+    <span></span><span class="c2">Observation <button class="q" data-tip="obs">?</button></span>
     <span class="c3">Cohort band &middot; this patient
       <button class="q" data-tip="band">?</button></span>
     <span class="c4">Weight <button class="q" data-tip="weight">?</button></span>
@@ -1013,6 +1031,11 @@ const TIPS = {
         'whichever one you are already looking at. The outcome buttons tell you what you asked ' +
         'for but not what the model will say \\u2014 that is still the model\\u2019s call, and ' +
         'it gets it wrong often enough to be worth trying.',
+  obs: 'The clinical name, then which summary of it. Underneath, the raw column name the ' +
+       'model knows it by and its unit. The coloured tab is the organ system, keyed under the ' +
+       'sheet. <b>Time in ICU</b> is the odd one out: it is the hour counter, so its peak is ' +
+       'simply how long the stay lasted \\u2014 and it is the second strongest feature in the ' +
+       'model, because how long someone has been in intensive care is itself evidence.',
   band: 'The grey block is where the <b>middle half</b> of the training patients sat for that ' +
         'observation \\u2014 the 25th to 75th percentile. It is a cohort range, not a clinical ' +
         'reference range. The rail spans the 1st to 99th percentile. The mark is this patient; ' +
