@@ -528,9 +528,11 @@ _LANDING_PAGE = """<!doctype html>
   .needle .n{display:inline-block;font:600 1.1rem/1 var(--mono);
     border:2px solid var(--flag);color:var(--flag);background:var(--paper);
     padding:.16rem .42rem;font-variant-numeric:tabular-nums}
-  /* display:block, or the <i> stays inline: it lands beside the plate instead
-     of under it and paints as a solid block the width of its font. */
-  .needle .st{display:block;width:2px;height:2.75rem;background:var(--flag);margin:0 auto}
+  /* Named .stick, not .st: the masthead stat cards already own .st, and their
+     1rem side padding leaked in here and inflated a 2px rule into a 34px
+     block. display:block because an <i> would otherwise sit beside the plate
+     rather than under it. */
+  .needle .stick{display:block;width:2px;height:2.75rem;background:var(--flag);margin:0 auto}
   .needle.none{display:none}
 
   .verdict{display:flex;align-items:flex-start;gap:1rem;margin-top:2.7rem;min-height:4.4rem}
@@ -639,7 +641,7 @@ _LANDING_PAGE = """<!doctype html>
              aria-label="Alarm threshold" aria-valuemin="0" aria-valuemax="1"
              aria-valuenow="0.4"></div>
         <i class="needle none" id="needle"><span class="n" id="needlev">&mdash;</span>
-          <i class="st"></i></i>
+          <i class="stick"></i></i>
         <i class="tk" style="left:0">0.0</i><i class="tk" style="left:25%">0.25</i>
         <i class="tk" style="left:50%">0.50</i><i class="tk" style="left:75%">0.75</i>
         <i class="tk" style="left:100%">1.0</i>
