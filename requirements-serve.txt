@@ -15,7 +15,8 @@
 # Regenerate artifacts/model.ubj + serving.json with `python export_serving.py`,
 # which refuses to write them unless they reproduce the trained pipeline exactly.
 numpy>=1.24,<3
-xgboost>=2.0
+xgboost-cpu>=2.0 ; sys_platform == 'linux'
+xgboost>=2.0 ; sys_platform != 'linux'
 fastapi>=0.110
-uvicorn[standard]>=0.29
+uvicorn>=0.29
 pydantic>=2.6

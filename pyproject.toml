@@ -17,10 +17,17 @@ requires-python = ">=3.10"
 # reproduce the trained pipeline's probabilities exactly.
 dependencies = [
     "fastapi>=0.110",
-    "uvicorn[standard]>=0.29",
+    # Plain uvicorn, not uvicorn[standard]: the serverless runtime supplies its
+    # own ASGI server, so uvloop/httptools/watchfiles are ~10 MB of nothing.
+    "uvicorn>=0.29",
     "pydantic>=2.6",
     "numpy>=1.24",
-    "xgboost>=2.0",
+    # xgboost-cpu is the same package built without the bundled CUDA runtime:
+    # 23 MB unpacked against 84 MB, which is what brings the serverless bundle
+    # under its 500 MB ceiling. It imports as `xgboost` and is published for
+    # Linux and Windows only, so other platforms take the ordinary wheel.
+    "xgboost-cpu>=2.0; sys_platform == 'linux'",
+    "xgboost>=2.0; sys_platform != 'linux'",
 ]
 
 [project.optional-dependencies]
