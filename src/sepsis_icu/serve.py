@@ -367,6 +367,10 @@ _LANDING_PAGE = """<!doctype html>
     .live{animation:beat 1.6s ease-in-out infinite}
     @keyframes beat{0%,100%{opacity:1}50%{opacity:.3}}
   }
+  @media(prefers-reduced-motion:reduce){
+    .needle{transition:none}
+    .q{transition:none}
+  }
 
   /* ---- header ---- */
   .hdr{padding:1.7rem 1.6rem 1.4rem;border-bottom:1.5px solid var(--edge)}
@@ -738,7 +742,8 @@ g('s-model').textContent = DATA.model_type || '\\u2014';
 /* Beat spacing comes from the patient's own recorded mean heart rate; the beat
    shape is drawn, because the Challenge data holds hourly summaries and not
    waveforms. Explained on the strip's own help button. */
-function drawEcg(bpm){
+function drawEcg(rate){
+  const bpm = Number.isFinite(rate) && rate > 0 ? rate : null;
   const W = 1140, H = 76, mid = H * 0.58;
   const beats = clamp(bpm ? bpm * 6 / 60 : 8, 3, 22);   // a 6-second strip
   const step = W / beats;
@@ -910,6 +915,14 @@ function renderVerdict(){
     g('needle').classList.add('none');
     return;
   }
+  if (current.error) {
+    stamp.className = 'stamp';
+    stamp.innerHTML = 'Unavailable<small>' + current.error.replace(/[<>&]/g, '') + '</small>';
+    text.textContent = 'The model did not answer. The sheet above is still this ' +
+      'patient\\u2019s real record.';
+    g('needle').classList.add('none');
+    return;
+  }
   const p = current.prob;
   const alarm = p >= thr;
   const truth = current.sample.label === 'Sepsis';
@@ -978,6 +991,13 @@ async function run(i){
   lastDrawn = i;
   [...tabs.children].forEach(t => t.classList.toggle('on', +t.dataset.i === i));
 
+  // Drop the previous result before the request goes out. The sheet below is
+  // already showing the new patient, so a stale needle and verdict would be
+  // making claims about someone else's record — and if the request fails, they
+  // would keep making them every time the alarm line moved.
+  current = null;
+  g('needle').classList.add('none');
+
   buildRows(sample);
   drawEcg(sample.features['HR_mean']);
   g('stamp').className = 'stamp';
@@ -993,10 +1013,8 @@ async function run(i){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     prob = (await r.json()).probability_sepsis;
   } catch (err) {
-    g('stamp').className = 'stamp';
-    g('stamp').innerHTML = 'Unavailable<small>' + err.message + '</small>';
-    g('verdicttext').textContent =
-      'The model did not answer. The sheet above is still this patient\\u2019s real record.';
+    current = {sample, error: err.message};
+    renderVerdict();
     return;
   }
   current = {sample, prob};
